@@ -1,0 +1,63 @@
+<details open>
+  <summary>Status</summary>
+  <div>
+    <small>User labels: valid=<b>{{ pos }}</b>, invalid=<b>{{ neg }}</b>>
+      {% if can_predict %}<span class="badge">Ready to predict</span>{% else %}<span class="badge">Label at least one of each class</span>{% endif %}
+    </small>
+  </div>
+</details>
+<form hx-post="/predict" hx-target="#table" hx-swap="innerHTML" style="margin: 0.5rem 0 1rem 0;">
+  <button type="submit" {% if not can_predict %}disabled{% endif %}>Re-predict</button>
+</form>
+<table role="grid">
+  <thead>
+  <tr>
+    {% for col in df.columns %}
+      <th>{{ col }}</th>
+    {% endfor %}
+    <th>Actions</th>
+  </tr>
+  </thead>
+  <tbody>
+  {% for _, row in df.iterrows() %}
+    {% set key = row['key_primary'] %}
+    {% set source = sources.get(key, 'unknown') %}
+    <tr>
+      {% for col in df.columns %}
+        {% if col == 'valid_sale' %}
+          <td>
+            {{ row[col] }}
+            {% if source == 'user' %}
+              <span class="badge badge-user">user</span>
+            {% elif source == 'machine' %}
+              <span class="badge badge-machine">machine</span>
+              {% set p = probas.get(key) %}
+              {% if p is not none %}
+                <span class="proba">({{ '%.0f' % (p*100) }}%)</span>
+              {% endif %}
+            {% endif %}
+          </td>
+        {% else %}
+          <td>{{ row[col] }}</td>
+        {% endif %}
+      {% endfor %}
+      <td class="actions">
+        {% if source != 'user' %}
+          <form hx-post="/label" hx-target="#table" hx-swap="innerHTML" style="display:inline">
+            <input type="hidden" name="key" value="{{ key }}">
+            <input type="hidden" name="value" value="valid">
+            <button type="submit">valid</button>
+          </form>
+          <form hx-post="/label" hx-target="#table" hx-swap="innerHTML" style="display:inline">
+            <input type="hidden" name="key" value="{{ key }}">
+            <input type="hidden" name="value" value="invalid">
+            <button type="submit" class="contrast">invalid</button>
+          </form>
+        {% else %}
+          <!-- No actions for user-labeled rows -->
+        {% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>

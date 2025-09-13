@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Validity Classifier Demo</title>
+  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+  <style>
+    .badge { padding: 2px 6px; border-radius: 6px; font-size: 0.75rem; }
+    .badge-user { background: #cce5ff; color: #084298; }
+    .badge-machine { background: #e2e3e5; color: #41464b; }
+    .proba { font-size: 0.75rem; color: #666; }
+    table thead th { position: sticky; top: 0; background: white; }
+    td.actions button { margin-right: 4px; }
+  </style>
+</head>
+<body>
+<main class="container">
+  <h1>Validity Classifier</h1>
+
+  <div class="grid">
+    <form method="post" action="/reset">
+      <button type="submit" class="secondary">Reset demo data</button>
+    </form>
+  </div>
+
+  <div id="table">
+    {% include "_table.html" %}
+  </div>
+</main>
+</body>
+</html>

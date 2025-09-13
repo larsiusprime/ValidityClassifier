@@ -1,0 +1,5 @@
+flask>=3.0.0
+Flask-Session>=0.5.0
+pandas>=2.1.0
+catboost>=1.2
+numpy>=1.26
