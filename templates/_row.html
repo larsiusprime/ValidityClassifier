@@ -1,0 +1,51 @@
+{% set key = row['key_primary'] %}
+{% set source = sources.get(key, 'unknown') %}
+<tr id="row-{{ key }}">
+  {% for col in df.columns %}
+    {% if col == 'valid_sale' %}
+      {% set val = row[col] %}
+      {% set p = None %}
+      {% if source == 'machine' %}
+        {% set p = probas.get(key) %}
+      {% endif %}
+      {% if source == 'machine' and p is not none %}
+        {% set idx = (p * 20)|int %}
+        <td class="heat-{{ idx }}">
+      {% elif val == 'valid' %}
+        <td class="bg-valid">
+      {% elif val == 'invalid' %}
+        <td class="bg-invalid">
+      {% else %}
+        <td>
+      {% endif %}
+        {{ row[col] }}
+        {% if source == 'user' %}
+          <span class="badge badge-user">user</span>
+        {% elif source == 'machine' %}
+          <span class="badge badge-machine">machine</span>
+          {% if p is not none %}
+            <span class="proba">({{ '%.0f' % (p*100) }}%)</span>
+          {% endif %}
+        {% endif %}
+      </td>
+    {% else %}
+      <td>{{ row[col] }}</td>
+    {% endif %}
+  {% endfor %}
+  <td class="actions">
+    {% if source != 'user' %}
+      <form hx-post="/label" hx-target="#row-{{ key }}" hx-swap="outerHTML" hx-select="tr" style="display:inline">
+        <input type="hidden" name="key" value="{{ key }}">
+        <input type="hidden" name="value" value="valid">
+        <button type="submit">valid</button>
+      </form>
+      <form hx-post="/label" hx-target="#row-{{ key }}" hx-swap="outerHTML" hx-select="tr" style="display:inline">
+        <input type="hidden" name="key" value="{{ key }}">
+        <input type="hidden" name="value" value="invalid">
+        <button type="submit" class="contrast">invalid</button>
+      </form>
+    {% else %}
+      <!-- No actions for user-labeled rows -->
+    {% endif %}
+  </td>
+</tr>

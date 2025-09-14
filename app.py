@@ -153,11 +153,24 @@ def set_label():
         probas.pop(key, None)
         session[SessionKeys.proba] = probas
 
-    # Return updated table body fragment
+    # Return updated single row fragment + OOB updates for status/predict
     src = get_sources()
     pos, neg = labeled_counts()
     can_predict = pos > 0 and neg > 0 and CatBoostClassifier is not None
-    return render_template("_table.html", df=df, sources=src, probas=get_probas(), can_predict=can_predict)
+
+    # get the updated row as a Series
+    row = df.loc[df["key_primary"] == key].iloc[0]
+
+    return render_template(
+        "_row_response.html",
+        df=df,
+        row=row,
+        sources=src,
+        probas=get_probas(),
+        pos=pos,
+        neg=neg,
+        can_predict=can_predict,
+    )
 
 
 @app.post("/predict")

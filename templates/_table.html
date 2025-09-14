@@ -1,4 +1,4 @@
-<details open>
+<details open id="status">
   <summary>Status</summary>
   <div>
     <small>User labels: valid=<b>{{ pos }}</b>, invalid=<b>{{ neg }}</b>>
@@ -6,7 +6,7 @@
     </small>
   </div>
 </details>
-<form hx-post="/predict" hx-target="#table" hx-swap="innerHTML" style="margin: 0.5rem 0 1rem 0;">
+<form id="predict-form" hx-post="/predict" hx-target="#table" hx-swap="innerHTML" style="margin: 0.5rem 0 1rem 0;">
   <button type="submit" {% if not can_predict %}disabled{% endif %}>Re-predict</button>
 </form>
 <table role="grid">
@@ -22,7 +22,7 @@
   {% for _, row in df.iterrows() %}
     {% set key = row['key_primary'] %}
     {% set source = sources.get(key, 'unknown') %}
-    <tr>
+    <tr id="row-{{ key }}">
       {% for col in df.columns %}
         {% if col == 'valid_sale' %}
           {% set val = row[col] %}
@@ -56,12 +56,12 @@
       {% endfor %}
       <td class="actions">
         {% if source != 'user' %}
-          <form hx-post="/label" hx-target="#table" hx-swap="innerHTML" style="display:inline">
+          <form hx-post="/label" hx-target="#row-{{ key }}" hx-swap="outerHTML" hx-select="tr" style="display:inline">
             <input type="hidden" name="key" value="{{ key }}">
             <input type="hidden" name="value" value="valid">
             <button type="submit">valid</button>
           </form>
-          <form hx-post="/label" hx-target="#table" hx-swap="innerHTML" style="display:inline">
+          <form hx-post="/label" hx-target="#row-{{ key }}" hx-swap="outerHTML" hx-select="tr" style="display:inline">
             <input type="hidden" name="key" value="{{ key }}">
             <input type="hidden" name="value" value="invalid">
             <button type="submit" class="contrast">invalid</button>

@@ -1,0 +1,12 @@
+<details open id="status" hx-swap-oob="true">
+  <summary>Status</summary>
+  <div>
+    <small>User labels: valid=<b>{{ pos }}</b>, invalid=<b>{{ neg }}</b>>
+      {% if can_predict %}<span class="badge">Ready to predict</span>{% else %}<span class="badge">Label at least one of each class</span>{% endif %}
+    </small>
+  </div>
+</details>
+
+<form id="predict-form" hx-swap-oob="true" hx-post="/predict" hx-target="#table" hx-swap="innerHTML" style="margin: 0.5rem 0 1rem 0;">
+  <button type="submit" {% if not can_predict %}disabled{% endif %}>Re-predict</button>
+</form>
