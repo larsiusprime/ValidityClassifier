@@ -25,13 +25,26 @@
     <tr>
       {% for col in df.columns %}
         {% if col == 'valid_sale' %}
-          <td>
+          {% set val = row[col] %}
+          {% set p = None %}
+          {% if source == 'machine' %}
+            {% set p = probas.get(key) %}
+          {% endif %}
+          {% if source == 'machine' and p is not none %}
+            {% set idx = (p * 20)|int %}
+            <td class="heat-{{ idx }}">
+          {% elif val == 'valid' %}
+            <td class="bg-valid">
+          {% elif val == 'invalid' %}
+            <td class="bg-invalid">
+          {% else %}
+            <td>
+          {% endif %}
             {{ row[col] }}
             {% if source == 'user' %}
               <span class="badge badge-user">user</span>
             {% elif source == 'machine' %}
               <span class="badge badge-machine">machine</span>
-              {% set p = probas.get(key) %}
               {% if p is not none %}
                 <span class="proba">({{ '%.0f' % (p*100) }}%)</span>
               {% endif %}
