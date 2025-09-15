@@ -20,7 +20,7 @@
   </thead>
   <tbody>
   {% for _, row in df.iterrows() %}
-    {% set key = row['key_primary'] %}
+    {% set key = (row['key_primary'] | string) %}
     {% set source = sources.get(key, 'unknown') %}
     <tr id="row-{{ key }}">
       {% for col in df.columns %}
@@ -55,7 +55,12 @@
         {% endif %}
       {% endfor %}
       <td class="actions">
-        {% if source != 'user' %}
+        {% if source == 'user' and row['valid_sale'] in ['valid', 'invalid'] %}
+          <form hx-post="/unset" hx-target="#row-{{ key }}" hx-swap="outerHTML" hx-select="tr" style="display:inline">
+            <input type="hidden" name="key" value="{{ key }}">
+            <button type="submit" class="secondary">Unset</button>
+          </form>
+        {% else %}
           <form hx-post="/label" hx-target="#row-{{ key }}" hx-swap="outerHTML" hx-select="tr" style="display:inline">
             <input type="hidden" name="key" value="{{ key }}">
             <input type="hidden" name="value" value="valid">
@@ -66,8 +71,6 @@
             <input type="hidden" name="value" value="invalid">
             <button type="submit" class="contrast">invalid</button>
           </form>
-        {% else %}
-          <!-- No actions for user-labeled rows -->
         {% endif %}
       </td>
     </tr>

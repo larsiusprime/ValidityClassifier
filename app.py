@@ -54,6 +54,34 @@ def make_demo_dataframe(n: int = 200) -> pd.DataFrame:
     return df
 
 
+def load_initial_dataframe() -> pd.DataFrame:
+    """Load initial DataFrame from sales_data.csv if present, else use demo data.
+
+    - Looks for sales_data.csv in the project directory (same dir as this app.py).
+    - Ensures a 'valid_sale' column exists and is initialized to 'unknown'.
+    - Ensures key_primary is treated as string.
+    """
+    csv_path = os.path.join(os.path.dirname(__file__), "sales_data.csv")
+    if os.path.exists(csv_path):
+        try:
+            df = pd.read_csv(csv_path, keep_default_na=False, na_filter=False)
+            # Enforce key as string to be consistent throughout the app
+            if "key_primary" in df.columns:
+                df["key_primary"] = df["key_primary"].astype(str)
+            else:
+                # If CSV somehow lacks key_primary, fall back to demo to avoid breakage
+                return make_demo_dataframe()
+            if "valid_sale" not in df.columns:
+                df["valid_sale"] = "unknown"
+            return df
+        except Exception:
+            # On any read/parse error, fall back to demo data
+            print("Unable to find sales_data.csv. Using synthetic dataframe.")
+            return make_demo_dataframe()
+    # Default: no CSV found
+    return make_demo_dataframe()
+
+
 def put_frame_in_session(df: pd.DataFrame):
     session[SessionKeys.df_json] = df.to_json(orient="split")
 
@@ -61,13 +89,16 @@ def put_frame_in_session(df: pd.DataFrame):
 def get_frame_from_session() -> pd.DataFrame:
     df_json = session.get(SessionKeys.df_json)
     if df_json is None:
-        df = make_demo_dataframe()
+        df = load_initial_dataframe()
         put_frame_in_session(df)
         # initialize label sources as unknown
         session[SessionKeys.label_source] = {k: "unknown" for k in df["key_primary"].tolist()}
         session[SessionKeys.proba] = {}
         return df
     df = pd.read_json(df_json, orient="split")
+    # Ensure key_primary is string after JSON round-trip to avoid dtype drift
+    if "key_primary" in df.columns:
+        df["key_primary"] = df["key_primary"].astype(str)
     return df
 
 
@@ -138,11 +169,14 @@ def set_label():
         return ("Invalid parameters", 400)
 
     df = get_frame_from_session()
-    if key not in set(df["key_primary"].astype(str)):
+    key = str(key)
+    keys_str = set(df["key_primary"].astype(str))
+    if key not in keys_str:
         return ("Unknown key", 404)
 
-    # Update the row
-    df.loc[df["key_primary"] == key, "valid_sale"] = value
+    # Update the row using string-safe comparison
+    mask = df["key_primary"].astype(str) == key
+    df.loc[mask, "valid_sale"] = value
     put_frame_in_session(df)
 
     # Mark as user-labeled
@@ -159,6 +193,52 @@ def set_label():
     can_predict = pos > 0 and neg > 0 and CatBoostClassifier is not None
 
     # get the updated row as a Series
+    row = df.loc[mask].iloc[0]
+
+    return render_template(
+        "_row_response.html",
+        df=df,
+        row=row,
+        sources=src,
+        probas=get_probas(),
+        pos=pos,
+        neg=neg,
+        can_predict=can_predict,
+    )
+
+
+@app.post("/unset")
+def unset_label():
+    """Unset a user label for a specific row (revert to unknown)."""
+    key = request.form.get("key")
+    if key is None:
+        return ("Invalid parameters", 400)
+
+    df = get_frame_from_session()
+    key = str(key)
+    keys_str = set(df["key_primary"].astype(str))
+    if key not in keys_str:
+        return ("Unknown key", 404)
+
+    # Revert the row label to unknown using string-safe comparison
+    mask = df["key_primary"].astype(str) == key
+    df.loc[mask, "valid_sale"] = "unknown"
+    put_frame_in_session(df)
+
+    # Mark source as unknown again
+    set_source(key, "unknown")
+
+    # Clear any stored probability for this key
+    probas = get_probas()
+    if key in probas:
+        probas.pop(key, None)
+        session[SessionKeys.proba] = probas
+
+    # Prepare response similar to /label
+    src = get_sources()
+    pos, neg = labeled_counts()
+    can_predict = pos > 0 and neg > 0 and CatBoostClassifier is not None
+
     row = df.loc[df["key_primary"] == key].iloc[0]
 
     return render_template(
@@ -209,6 +289,19 @@ def predict():
         allow_writing_files=False,
     )
 
+    # Defensive sanitization of training features
+    X_train = X_train.copy()
+    for c in feature_cols:
+        if X_train[c].dtype == "object":
+            # Replace missing with empty string and ensure string dtype
+            X_train[c] = X_train[c].astype("string").fillna("").astype(str)
+        else:
+            # Coerce to numeric and fill missing with 0
+            X_train[c] = pd.to_numeric(X_train[c], errors='coerce').fillna(0)
+
+    # Identify categorical columns AFTER sanitization
+    cat_cols = [i for i, c in enumerate(feature_cols) if X_train[c].dtype == "object"]
+
     # Convert y to numeric
     y = y_train.astype("Int64").astype(int)
 
@@ -216,8 +309,15 @@ def predict():
 
     # Predict for non-user rows (unknown or machine)
     non_user_mask = ~user_mask
-    X_pred = df.loc[non_user_mask, feature_cols]
+    X_pred = df.loc[non_user_mask, feature_cols].copy()
     if not X_pred.empty:
+        # Sanitize prediction features in the same way
+        for c in feature_cols:
+            if X_pred[c].dtype == "object":
+                X_pred[c] = X_pred[c].astype("string").fillna("").astype(str)
+            else:
+                X_pred[c] = pd.to_numeric(X_pred[c], errors='coerce').fillna(0)
+
         proba = model.predict_proba(X_pred)[:, 1]
         pred_class = (proba >= 0.5).astype(int)
         pred_label = pd.Series(pred_class, index=X_pred.index).map({1: "valid", 0: "invalid"})
@@ -237,7 +337,7 @@ def predict():
 
 @app.post("/reset")
 def reset():
-    df = make_demo_dataframe()
+    df = load_initial_dataframe()
     put_frame_in_session(df)
     session[SessionKeys.label_source] = {k: "unknown" for k in df["key_primary"].tolist()}
     session[SessionKeys.proba] = {}
