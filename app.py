@@ -6,6 +6,8 @@ from typing import Tuple
 from flask import Flask, render_template, request, session, redirect, url_for
 from flask_session import Session
 import pandas as pd
+from io import StringIO
+from sklearn.model_selection import train_test_split
 
 # Try to import CatBoost; provide a gentle error if unavailable
 try:
@@ -82,6 +84,21 @@ def load_initial_dataframe() -> pd.DataFrame:
     return make_demo_dataframe()
 
 
+def sanitize_df(df: pd.DataFrame, feature_cols: list[str]) -> pd.DataFrame:
+    """Sanitize feature columns once per session to stabilize dtypes.
+
+    - Object-like columns => convert to Python str with empty string for missing.
+    - Numeric-like columns => coerce to numeric, fill missing with 0.
+    """
+    df = df.copy()
+    for c in feature_cols:
+        if df[c].dtype == "object" or str(df[c].dtype).startswith("string"):
+            df[c] = df[c].astype("string").fillna("").astype(str)
+        else:
+            df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
+    return df
+
+
 def put_frame_in_session(df: pd.DataFrame):
     session[SessionKeys.df_json] = df.to_json(orient="split")
 
@@ -90,12 +107,15 @@ def get_frame_from_session() -> pd.DataFrame:
     df_json = session.get(SessionKeys.df_json)
     if df_json is None:
         df = load_initial_dataframe()
+        # Sanitize once per session for feature columns
+        feature_cols = [c for c in df.columns if c not in ("key_primary", "valid_sale")]
+        df = sanitize_df(df, feature_cols)
         put_frame_in_session(df)
         # initialize label sources as unknown
         session[SessionKeys.label_source] = {k: "unknown" for k in df["key_primary"].tolist()}
         session[SessionKeys.proba] = {}
         return df
-    df = pd.read_json(df_json, orient="split")
+    df = pd.read_json(StringIO(df_json), orient="split")
     # Ensure key_primary is string after JSON round-trip to avoid dtype drift
     if "key_primary" in df.columns:
         df["key_primary"] = df["key_primary"].astype(str)
@@ -139,17 +159,48 @@ def labeled_counts() -> Tuple[int, int]:
     return int(pos), int(neg)
 
 
+# Minimum per-class labels required to enable prediction with stratified split
+REQUIRED_PER_CLASS = 3
+
+
+def predict_button_state(pos: int, neg: int) -> dict:
+    """Compute enablement and UX strings for the predict button.
+
+    Returns dict with keys: can_predict (bool), predict_text (str), predict_title (str)
+    """
+    can_predict = (
+        CatBoostClassifier is not None and pos >= REQUIRED_PER_CLASS and neg >= REQUIRED_PER_CLASS
+    )
+    if can_predict:
+        text = "Re-predict"
+        title = "Run the model on unlabeled rows"
+    else:
+        need_pos = max(0, REQUIRED_PER_CLASS - pos)
+        need_neg = max(0, REQUIRED_PER_CLASS - neg)
+        parts = []
+        if need_pos:
+            parts.append(f"{need_pos} more valid")
+        if need_neg:
+            parts.append(f"{need_neg} more invalid")
+        needed = " and ".join(parts) if parts else f"{REQUIRED_PER_CLASS} per class"
+        text = f"Re-predict (need {REQUIRED_PER_CLASS}/class)"
+        title = f"Label {needed} to enable predictions"
+    return {"can_predict": can_predict, "predict_text": text, "predict_title": title}
+
+
 @app.route("/")
 def index():
     df = get_frame_from_session()
     src = get_sources()
     pos, neg = labeled_counts()
-    can_predict = pos > 0 and neg > 0 and CatBoostClassifier is not None
+    state = predict_button_state(pos, neg)
     return render_template(
         "index.html",
         df=df,
         sources=src,
-        can_predict=can_predict,
+        can_predict=state["can_predict"],
+        predict_text=state["predict_text"],
+        predict_title=state["predict_title"],
         pos=pos,
         neg=neg,
         probas=get_probas(),
@@ -190,7 +241,7 @@ def set_label():
     # Return updated single row fragment + OOB updates for status/predict
     src = get_sources()
     pos, neg = labeled_counts()
-    can_predict = pos > 0 and neg > 0 and CatBoostClassifier is not None
+    state = predict_button_state(pos, neg)
 
     # get the updated row as a Series
     row = df.loc[mask].iloc[0]
@@ -203,7 +254,9 @@ def set_label():
         probas=get_probas(),
         pos=pos,
         neg=neg,
-        can_predict=can_predict,
+        can_predict=state["can_predict"],
+        predict_text=state["predict_text"],
+        predict_title=state["predict_title"],
     )
 
 
@@ -237,7 +290,7 @@ def unset_label():
     # Prepare response similar to /label
     src = get_sources()
     pos, neg = labeled_counts()
-    can_predict = pos > 0 and neg > 0 and CatBoostClassifier is not None
+    state = predict_button_state(pos, neg)
 
     row = df.loc[df["key_primary"] == key].iloc[0]
 
@@ -249,7 +302,9 @@ def unset_label():
         probas=get_probas(),
         pos=pos,
         neg=neg,
-        can_predict=can_predict,
+        can_predict=state["can_predict"],
+        predict_text=state["predict_text"],
+        predict_title=state["predict_title"],
     )
 
 
@@ -265,10 +320,14 @@ def predict():
     user_mask = df["key_primary"].map(src).eq("user")
     train_df = df[user_mask]
 
-    # Guard: need at least one valid and one invalid
+    # Guard: need at least REQUIRED_PER_CLASS labels per class for stratified split
     y_train = train_df["valid_sale"].map({"valid": 1, "invalid": 0})
-    if y_train.dropna().nunique() < 2:
-        return ("Need at least one 'valid' and one 'invalid' user label before predicting.", 400)
+    counts = y_train.value_counts()
+    if counts.get(1, 0) < REQUIRED_PER_CLASS or counts.get(0, 0) < REQUIRED_PER_CLASS:
+        return (
+            f"Need at least {REQUIRED_PER_CLASS} 'valid' and {REQUIRED_PER_CLASS} 'invalid' user labels before predicting.",
+            400,
+        )
 
     # Feature set: all columns except key_primary and valid_sale
     feature_cols = [c for c in df.columns if c not in ("key_primary", "valid_sale")]
@@ -277,7 +336,7 @@ def predict():
     # Identify categorical columns by dtype object
     cat_cols = [i for i, c in enumerate(feature_cols) if X_train[c].dtype == "object"]
 
-    # Build and fit CatBoost
+    # Build and fit CatBoost with early stopping and all CPU cores
     model = CatBoostClassifier(
         depth=6,
         learning_rate=0.1,
@@ -287,37 +346,28 @@ def predict():
         random_seed=42,
         verbose=False,
         allow_writing_files=False,
+        thread_count=-1,
     )
-
-    # Defensive sanitization of training features
-    X_train = X_train.copy()
-    for c in feature_cols:
-        if X_train[c].dtype == "object":
-            # Replace missing with empty string and ensure string dtype
-            X_train[c] = X_train[c].astype("string").fillna("").astype(str)
-        else:
-            # Coerce to numeric and fill missing with 0
-            X_train[c] = pd.to_numeric(X_train[c], errors='coerce').fillna(0)
-
-    # Identify categorical columns AFTER sanitization
-    cat_cols = [i for i, c in enumerate(feature_cols) if X_train[c].dtype == "object"]
 
     # Convert y to numeric
     y = y_train.astype("Int64").astype(int)
 
-    model.fit(X_train, y, cat_features=cat_cols)
+    # Train/validation split for early stopping
+    X_tr, X_val, y_tr, y_val = train_test_split(X_train, y, test_size=0.2, stratify=y, random_state=42)
+
+    model.fit(
+        X_tr,
+        y_tr,
+        cat_features=cat_cols,
+        eval_set=(X_val, y_val),
+        use_best_model=True,
+        verbose=False,
+    )
 
     # Predict for non-user rows (unknown or machine)
     non_user_mask = ~user_mask
     X_pred = df.loc[non_user_mask, feature_cols].copy()
     if not X_pred.empty:
-        # Sanitize prediction features in the same way
-        for c in feature_cols:
-            if X_pred[c].dtype == "object":
-                X_pred[c] = X_pred[c].astype("string").fillna("").astype(str)
-            else:
-                X_pred[c] = pd.to_numeric(X_pred[c], errors='coerce').fillna(0)
-
         proba = model.predict_proba(X_pred)[:, 1]
         pred_class = (proba >= 0.5).astype(int)
         pred_label = pd.Series(pred_class, index=X_pred.index).map({1: "valid", 0: "invalid"})
@@ -331,13 +381,26 @@ def predict():
             set_proba(str(idx), float(p))
 
     pos, neg = labeled_counts()
-    can_predict = pos > 0 and neg > 0 and CatBoostClassifier is not None
-    return render_template("_table.html", df=df, sources=get_sources(), probas=get_probas(), can_predict=can_predict)
+    state = predict_button_state(pos, neg)
+    return render_template(
+        "_table.html",
+        df=df,
+        sources=get_sources(),
+        probas=get_probas(),
+        can_predict=state["can_predict"],
+        predict_text=state["predict_text"],
+        predict_title=state["predict_title"],
+        pos=pos,
+        neg=neg,
+    )
 
 
 @app.post("/reset")
 def reset():
     df = load_initial_dataframe()
+    # Sanitize once per session on reset
+    feature_cols = [c for c in df.columns if c not in ("key_primary", "valid_sale")]
+    df = sanitize_df(df, feature_cols)
     put_frame_in_session(df)
     session[SessionKeys.label_source] = {k: "unknown" for k in df["key_primary"].tolist()}
     session[SessionKeys.proba] = {}

@@ -104,6 +104,19 @@ def unique_10_digit_ids(rng: np.random.Generator, n: int) -> np.ndarray:
     return np.array([f"{x:010d}" for x in ids])
 
 
+def choose_company_flags(n_rows: int, rng: np.random.Generator, max_ratio: float) -> np.ndarray:
+    """Return a boolean mask with at most floor(max_ratio * n_rows) True values.
+
+    This enforces a hard cap on the proportion of companies.
+    """
+    k_max = int(np.floor(max_ratio * n_rows))
+    flags = np.zeros(n_rows, dtype=bool)
+    if k_max > 0:
+        idx = rng.choice(n_rows, size=k_max, replace=False)
+        flags[idx] = True
+    return flags
+
+
 def build_dataframe(
     n_rows: int,
     seed: int,
@@ -119,8 +132,8 @@ def build_dataframe(
     mult_std: float = 0.10,
     mult_clip_low: float = 0.70,
     mult_clip_high: float = 1.30,
-    buyer_company_prob: float = 0.45,
-    seller_company_prob: float = 0.45,
+    buyer_company_prob: float = 0.05,
+    seller_company_prob: float = 0.05,
 ) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
 
@@ -131,8 +144,9 @@ def build_dataframe(
     area = rng.choice(market_areas, size=n_rows)
     sale_date = random_dates(rng, n_rows, date_start, date_end)
 
-    buyer_is_company = rng.random(n_rows) < buyer_company_prob
-    seller_is_company = rng.random(n_rows) < seller_company_prob
+    # Enforce ≤5% (or given max) companies via capped selection of indices
+    buyer_is_company = choose_company_flags(n_rows, rng, buyer_company_prob)
+    seller_is_company = choose_company_flags(n_rows, rng, seller_company_prob)
 
     buyer_names = np.empty(n_rows, dtype=object)
     buyer_surnames = np.empty(n_rows, dtype=object)
