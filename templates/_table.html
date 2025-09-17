@@ -6,7 +6,7 @@
     </small>
   </div>
 </details>
-<form id="predict-form" hx-post="/predict" hx-target="#table" hx-swap="innerHTML" style="margin: 0.5rem 0 1rem 0;">
+<form id="predict-form" hx-post="/predict" hx-swap="none" style="margin: 0.5rem 0 1rem 0;">
   <button type="submit" title="{{ predict_title }}" {% if not can_predict %}disabled{% endif %}>{{ predict_text }}</button>
   <div class="predict-meta" aria-live="polite">
     <div class="thinking">Thinking...</div>
@@ -62,13 +62,13 @@
         {% endif %}
         {% if source == 'machine' and p is not none %}
           {% set idx = (p * 20)|int %}
-          <td class="heat-{{ idx }}">
+          <td id="cell-label-{{ key }}" class="heat-{{ idx }}">
         {% elif val == 'valid' %}
-          <td class="bg-valid">
+          <td id="cell-label-{{ key }}" class="bg-valid">
         {% elif val == 'invalid' %}
-          <td class="bg-invalid">
+          <td id="cell-label-{{ key }}" class="bg-invalid">
         {% else %}
-          <td>
+          <td id="cell-label-{{ key }}">
         {% endif %}
           {{ row['valid_sale'] }}
           {% if source == 'user' %}

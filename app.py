@@ -507,6 +507,7 @@ def predict():
     # Predict for non-user rows (unknown or machine)
     non_user_mask = ~user_mask
     X_pred = df.loc[non_user_mask, feature_cols].copy()
+    changed_rows = []
     if not X_pred.empty:
         proba = use_model.predict_proba(X_pred)[:, 1]
         pred_class = (proba >= 0.5).astype(int)
@@ -529,6 +530,9 @@ def predict():
         probas_bulk.update({k: float(p) for k, p in zip(keys, proba)})
         session[SessionKeys.proba] = probas_bulk
 
+        # Collect changed rows to send OOB cell updates
+        changed_rows = [df.loc[idx] for idx in X_pred.index.tolist()]
+
     pos, neg = labeled_counts()
     state = predict_button_state(pos, neg)
 
@@ -536,8 +540,10 @@ def predict():
     session[SessionKeys.last_predicted_at] = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
     print(f"Ready to render after {datetime.now()-start_time}")
 
+    # Return only OOB updates (status + changed label cells)
     return render_template(
-        "_table.html",
+        "_predict_oob.html",
+        rows=changed_rows,
         df=df,
         sources=get_sources(),
         probas=get_probas(),

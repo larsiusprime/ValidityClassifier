@@ -1,0 +1,9 @@
+{# OOB status/predict header update #}
+{% include '_status.html' %}
+
+{# Emit one OOB label-cell fragment per affected row, wrapped so the <td> parses correctly #}
+{% for row in rows %}
+  <table><tbody><tr>
+    {% include '_label_cell.html' %}
+  </tr></tbody></table>
+{% endfor %}

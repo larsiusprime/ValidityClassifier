@@ -1,0 +1,25 @@
+{% set key = (row['key_primary'] | string) %}
+{% set source = sources.get(key, 'unknown') %}
+{% set val = row['valid_sale'] %}
+{% set p = (probas.get(key) if source == 'machine' else None) %}
+
+{% if source == 'machine' and p is not none %}
+  {% set idx = (p * 20)|int %}
+  <td id="cell-label-{{ key }}" class="heat-{{ idx }}" hx-swap-oob="true">
+{% elif val == 'valid' %}
+  <td id="cell-label-{{ key }}" class="bg-valid" hx-swap-oob="true">
+{% elif val == 'invalid' %}
+  <td id="cell-label-{{ key }}" class="bg-invalid" hx-swap-oob="true">
+{% else %}
+  <td id="cell-label-{{ key }}" hx-swap-oob="true">
+{% endif %}
+  {{ row['valid_sale'] }}
+  {% if source == 'user' %}
+    <span class="badge badge-user">user</span>
+  {% elif source == 'machine' %}
+    <span class="badge badge-machine">machine</span>
+    {% if p is not none %}
+      <span class="proba">({{ '%.0f' % (p*100) }}%)</span>
+    {% endif %}
+  {% endif %}
+</td>

@@ -30,13 +30,13 @@
   {% endif %}
   {% if source == 'machine' and p is not none %}
     {% set idx = (p * 20)|int %}
-    <td class="heat-{{ idx }}">
+    <td id="cell-label-{{ key }}" class="heat-{{ idx }}">
   {% elif val == 'valid' %}
-    <td class="bg-valid">
+    <td id="cell-label-{{ key }}" class="bg-valid">
   {% elif val == 'invalid' %}
-    <td class="bg-invalid">
+    <td id="cell-label-{{ key }}" class="bg-invalid">
   {% else %}
-    <td>
+    <td id="cell-label-{{ key }}">
   {% endif %}
     {{ row['valid_sale'] }}
     {% if source == 'user' %}

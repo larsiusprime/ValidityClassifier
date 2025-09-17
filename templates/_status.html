@@ -7,7 +7,7 @@
   </div>
 </details>
 
-<form id="predict-form" hx-swap-oob="true" hx-post="/predict" hx-target="#table" hx-swap="innerHTML" style="margin: 0.5rem 0 1rem 0;">
+<form id="predict-form" hx-swap-oob="true" hx-post="/predict" hx-swap="none" style="margin: 0.5rem 0 1rem 0;">
   <button type="submit" title="{{ predict_title }}" {% if not can_predict %}disabled{% endif %}>{{ predict_text }}</button>
   <div class="predict-meta" aria-live="polite">
     <div class="thinking">Thinking...</div>
