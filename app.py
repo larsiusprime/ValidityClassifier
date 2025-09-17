@@ -1,6 +1,7 @@
 import json
 import os
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Tuple
 
 from flask import Flask, render_template, request, session, redirect, url_for
@@ -21,6 +22,7 @@ class SessionKeys:
     df_json: str = "df_json"
     label_source: str = "label_source"  # map from key_primary to source: user|machine|unknown
     proba: str = "pred_proba"  # optional prediction probability per key
+    last_predicted_at: str = "last_predicted_at"  # timestamp of last predict completion
 
 
 app = Flask(__name__)
@@ -204,6 +206,7 @@ def index():
         pos=pos,
         neg=neg,
         probas=get_probas(),
+        last_predicted_at=session.get(SessionKeys.last_predicted_at),
     )
 
 
@@ -257,6 +260,7 @@ def set_label():
         can_predict=state["can_predict"],
         predict_text=state["predict_text"],
         predict_title=state["predict_title"],
+        last_predicted_at=session.get(SessionKeys.last_predicted_at),
     )
 
 
@@ -305,6 +309,7 @@ def unset_label():
         can_predict=state["can_predict"],
         predict_text=state["predict_text"],
         predict_title=state["predict_title"],
+        last_predicted_at=session.get(SessionKeys.last_predicted_at),
     )
 
 
@@ -382,6 +387,10 @@ def predict():
 
     pos, neg = labeled_counts()
     state = predict_button_state(pos, neg)
+
+    # Record completion time for UX
+    session[SessionKeys.last_predicted_at] = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
+
     return render_template(
         "_table.html",
         df=df,
@@ -392,6 +401,7 @@ def predict():
         predict_title=state["predict_title"],
         pos=pos,
         neg=neg,
+        last_predicted_at=session.get(SessionKeys.last_predicted_at),
     )
 
 
@@ -404,6 +414,7 @@ def reset():
     put_frame_in_session(df)
     session[SessionKeys.label_source] = {k: "unknown" for k in df["key_primary"].tolist()}
     session[SessionKeys.proba] = {}
+    session.pop(SessionKeys.last_predicted_at, None)
     return redirect(url_for("index"))
 
 

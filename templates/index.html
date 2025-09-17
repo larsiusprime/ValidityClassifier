@@ -74,6 +74,24 @@
     td.actions { white-space: normal; }
     td.actions form { display: block !important; margin: 0 0 4px 0; }
     td.actions button { display: block; width: 100%; margin-right: 0; }
+
+    /* Predict form throbber + last-run area */
+    .predict-meta { margin-top: 0.4rem; min-height: 1.2rem; }
+    .predict-meta .thinking { display: none; opacity: 0; }
+    .predict-meta .last-run { display: inline; opacity: 0.9; }
+
+    /* While the form is requesting, show the throbber and hide the last-run message */
+    form.htmx-request .predict-meta .thinking {
+      display: inline-block;
+      opacity: 1;
+      animation: fadePulse 1.2s ease-in-out infinite alternate;
+    }
+    form.htmx-request .predict-meta .last-run { display: none; }
+
+    @keyframes fadePulse {
+      from { opacity: 0.25; }
+      to   { opacity: 1; }
+    }
   </style>
 </head>
 <body>
