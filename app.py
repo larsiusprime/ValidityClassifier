@@ -10,6 +10,11 @@ import pandas as pd
 from io import StringIO
 from sklearn.model_selection import train_test_split
 
+# Concurrency and per-session model registry
+from concurrent.futures import ThreadPoolExecutor
+from threading import Lock
+from uuid import uuid4
+
 # Try to import CatBoost; provide a gentle error if unavailable
 try:
     from catboost import CatBoostClassifier
@@ -23,6 +28,8 @@ class SessionKeys:
     label_source: str = "label_source"  # map from key_primary to source: user|machine|unknown
     proba: str = "pred_proba"  # optional prediction probability per key
     last_predicted_at: str = "last_predicted_at"  # timestamp of last predict completion
+    labels_version: str = "labels_version"  # incremented on each user label/unset
+    sid: str = "sid"  # stable per-session id for model registry
 
 
 app = Flask(__name__)
@@ -37,6 +44,10 @@ app.config.update(
     SESSION_PERMANENT=False,
 )
 Session(app)
+
+# Thread pool and per-session model registry (in-memory, single-process)
+EXECUTOR = ThreadPoolExecutor(max_workers=2)
+MODEL_REGISTRY: dict = {}
 
 
 def make_demo_dataframe(n: int = 200) -> pd.DataFrame:
@@ -116,6 +127,10 @@ def get_frame_from_session() -> pd.DataFrame:
         # initialize label sources as unknown
         session[SessionKeys.label_source] = {k: "unknown" for k in df["key_primary"].tolist()}
         session[SessionKeys.proba] = {}
+        # initialize versioning
+        session[SessionKeys.labels_version] = 0
+        # ensure sid exists for registry key
+        _ = get_sid()
         return df
     df = pd.read_json(StringIO(df_json), orient="split")
     # Ensure key_primary is string after JSON round-trip to avoid dtype drift
@@ -148,6 +163,123 @@ def set_proba(key: str, proba: float):
     probas = get_probas()
     probas[key] = float(proba)
     session[SessionKeys.proba] = probas
+
+
+# ---- Session/model registry helpers ----
+
+def get_sid() -> str:
+    sid = session.get(SessionKeys.sid)
+    if not sid:
+        sid = uuid4().hex
+        session[SessionKeys.sid] = sid
+    # Ensure registry slot
+    if sid not in MODEL_REGISTRY:
+        MODEL_REGISTRY[sid] = {
+            "lock": Lock(),
+            "future": None,
+            "model": None,
+            "trained_on_version": -1,
+            "trained_at": None,
+        }
+    return sid
+
+
+def get_labels_version() -> int:
+    return int(session.get(SessionKeys.labels_version, 0))
+
+
+def bump_labels_version():
+    session[SessionKeys.labels_version] = get_labels_version() + 1
+
+
+def get_registry_entry(sid: str) -> dict:
+    # Ensure entry exists
+    if sid not in MODEL_REGISTRY:
+        MODEL_REGISTRY[sid] = {
+            "lock": Lock(),
+            "future": None,
+            "model": None,
+            "trained_on_version": -1,
+            "trained_at": None,
+        }
+    return MODEL_REGISTRY[sid]
+
+
+def _snapshot_training_data(df: pd.DataFrame, sources: dict):
+    """Prepare X, y, feature_cols, cat_cols from current df and sources for user-labeled rows."""
+    user_mask = df["key_primary"].map(sources).eq("user")
+    train_df = df[user_mask]
+    y_train = train_df["valid_sale"].map({"valid": 1, "invalid": 0})
+    feature_cols = [c for c in df.columns if c not in ("key_primary", "valid_sale")]
+    X_train = train_df[feature_cols].copy()
+    cat_cols = [i for i, c in enumerate(feature_cols) if X_train[c].dtype == "object"]
+    y = y_train.astype("Int64").astype(int)
+    return X_train, y, feature_cols, cat_cols
+
+
+def _train_model_sync(X, y, cat_cols):
+    model = CatBoostClassifier(
+        depth=6,
+        learning_rate=0.1,
+        iterations=200,
+        loss_function="Logloss",
+        eval_metric="Logloss",
+        random_seed=42,
+        verbose=False,
+        allow_writing_files=False,
+        thread_count=-1,
+    )
+    X_tr, X_val, y_tr, y_val = train_test_split(X, y, test_size=0.2, stratify=y, random_state=42)
+    model.fit(
+        X_tr,
+        y_tr,
+        cat_features=cat_cols,
+        eval_set=(X_val, y_val),
+        use_best_model=True,
+        verbose=False,
+    )
+    return model
+
+
+def maybe_enqueue_training(sid: str, df: pd.DataFrame, sources: dict):
+    """If requirements met and model stale, enqueue background training for this session."""
+    if CatBoostClassifier is None:
+        return
+    # Check label requirements
+    user_mask = df["key_primary"].map(sources).eq("user")
+    y = df.loc[user_mask, "valid_sale"].map({"valid": 1, "invalid": 0})
+    counts = y.value_counts()
+    if counts.get(1, 0) < REQUIRED_PER_CLASS or counts.get(0, 0) < REQUIRED_PER_CLASS:
+        return
+
+    version = get_labels_version()
+    entry = get_registry_entry(sid)
+    with entry["lock"]:
+        # If already training, do nothing
+        fut = entry.get("future")
+        if fut is not None and not fut.done():
+            return
+        # If model is fresh enough, skip
+        if entry.get("trained_on_version", -1) >= version:
+            return
+        # Snapshot for background task
+        X, y_num, feature_cols, cat_cols = _snapshot_training_data(df, sources)
+
+        def _task(X, y_num, cat_cols, version, sid):
+            try:
+                model = _train_model_sync(X, y_num, cat_cols)
+                ts = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
+                ent = get_registry_entry(sid)
+                with ent["lock"]:
+                    ent["model"] = model
+                    ent["trained_on_version"] = version
+                    ent["trained_at"] = ts
+                    print(f"Model version {version} trained at {ts}")
+            except Exception:
+                # Fail silently; next trigger can retry
+                pass
+
+        entry["future"] = EXECUTOR.submit(_task, X, y_num, cat_cols, version, sid)
 
 
 def labeled_counts() -> Tuple[int, int]:
@@ -241,6 +373,11 @@ def set_label():
         probas.pop(key, None)
         session[SessionKeys.proba] = probas
 
+    # Versioning + maybe background training
+    bump_labels_version()
+    sid = get_sid()
+    maybe_enqueue_training(sid, df, get_sources())
+
     # Return updated single row fragment + OOB updates for status/predict
     src = get_sources()
     pos, neg = labeled_counts()
@@ -291,6 +428,11 @@ def unset_label():
         probas.pop(key, None)
         session[SessionKeys.proba] = probas
 
+    # Versioning + maybe background training
+    bump_labels_version()
+    sid = get_sid()
+    maybe_enqueue_training(sid, df, get_sources())
+
     # Prepare response similar to /label
     src = get_sources()
     pos, neg = labeled_counts()
@@ -334,46 +476,37 @@ def predict():
             400,
         )
 
-    # Feature set: all columns except key_primary and valid_sale
+    # Feature set for prediction
     feature_cols = [c for c in df.columns if c not in ("key_primary", "valid_sale")]
-    X_train = train_df[feature_cols]
 
-    # Identify categorical columns by dtype object
-    cat_cols = [i for i, c in enumerate(feature_cols) if X_train[c].dtype == "object"]
+    # Retrieve per-session model
+    sid = get_sid()
+    entry = get_registry_entry(sid)
+    version = get_labels_version()
 
-    # Build and fit CatBoost with early stopping and all CPU cores
-    model = CatBoostClassifier(
-        depth=6,
-        learning_rate=0.1,
-        iterations=200,
-        loss_function="Logloss",
-        eval_metric="Logloss",
-        random_seed=42,
-        verbose=False,
-        allow_writing_files=False,
-        thread_count=-1,
-    )
+    # Use cached model if trained on current version; else train synchronously now
+    use_model = None
+    with entry["lock"]:
+        if entry.get("model") is not None and entry.get("trained_on_version") == version:
+            use_model = entry["model"]
 
-    # Convert y to numeric
-    y = y_train.astype("Int64").astype(int)
-
-    # Train/validation split for early stopping
-    X_tr, X_val, y_tr, y_val = train_test_split(X_train, y, test_size=0.2, stratify=y, random_state=42)
-
-    model.fit(
-        X_tr,
-        y_tr,
-        cat_features=cat_cols,
-        eval_set=(X_val, y_val),
-        use_best_model=True,
-        verbose=False,
-    )
+    if use_model is None:
+        print("existing model is stale or missing, retraining full model")
+        # Train synchronously with current snapshot
+        X_train, y, _feature_cols_check, cat_cols = _snapshot_training_data(df, src)
+        # _feature_cols_check should equal feature_cols; keep feature_cols for prediction
+        use_model = _train_model_sync(X_train, y, cat_cols)
+        ts = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
+        with entry["lock"]:
+            entry["model"] = use_model
+            entry["trained_on_version"] = version
+            entry["trained_at"] = ts
 
     # Predict for non-user rows (unknown or machine)
     non_user_mask = ~user_mask
     X_pred = df.loc[non_user_mask, feature_cols].copy()
     if not X_pred.empty:
-        proba = model.predict_proba(X_pred)[:, 1]
+        proba = use_model.predict_proba(X_pred)[:, 1]
         pred_class = (proba >= 0.5).astype(int)
         pred_label = pd.Series(pred_class, index=X_pred.index).map({1: "valid", 0: "invalid"})
 
@@ -415,6 +548,18 @@ def reset():
     session[SessionKeys.label_source] = {k: "unknown" for k in df["key_primary"].tolist()}
     session[SessionKeys.proba] = {}
     session.pop(SessionKeys.last_predicted_at, None)
+    # Clear labels_version and per-session model registry entry
+    sid = session.get(SessionKeys.sid)
+    if sid and sid in MODEL_REGISTRY:
+        entry = MODEL_REGISTRY.pop(sid, None)
+        # Best-effort: cancel any in-flight future (cannot truly cancel running CatBoost)
+        try:
+            fut = entry.get("future") if entry else None
+            if fut:
+                fut.cancel()
+        except Exception:
+            pass
+    session.pop(SessionKeys.labels_version, None)
     return redirect(url_for("index"))
 
 
