@@ -457,6 +457,7 @@ def unset_label():
 
 @app.post("/predict")
 def predict():
+    start_time = datetime.now()
     df = get_frame_from_session()
     src = get_sources()
 
@@ -489,9 +490,10 @@ def predict():
     with entry["lock"]:
         if entry.get("model") is not None and entry.get("trained_on_version") == version:
             use_model = entry["model"]
+            print(f"Using existing model trained on {version} at {entry.get("trained_at")}")
 
     if use_model is None:
-        print("existing model is stale or missing, retraining full model")
+        print("Existing model is stale or missing, retraining full model")
         # Train synchronously with current snapshot
         X_train, y, _feature_cols_check, cat_cols = _snapshot_training_data(df, src)
         # _feature_cols_check should equal feature_cols; keep feature_cols for prediction
@@ -513,16 +515,26 @@ def predict():
         df.loc[X_pred.index, "valid_sale"] = pred_label
         put_frame_in_session(df)
 
-        # Update sources and store probabilities
-        for idx, p in zip(df.loc[X_pred.index, "key_primary"], proba):
-            set_source(str(idx), "machine")
-            set_proba(str(idx), float(p))
+        # Update sources and store probabilities (bulk, avoid per-row session writes)
+        keys_series = df.loc[X_pred.index, "key_primary"].astype(str)
+        keys = keys_series.tolist()
+
+        # Bulk update label sources for predicted rows
+        src_bulk = get_sources()
+        src_bulk.update({k: "machine" for k in keys})
+        session[SessionKeys.label_source] = src_bulk
+
+        # Bulk update probabilities
+        probas_bulk = get_probas()
+        probas_bulk.update({k: float(p) for k, p in zip(keys, proba)})
+        session[SessionKeys.proba] = probas_bulk
 
     pos, neg = labeled_counts()
     state = predict_button_state(pos, neg)
 
     # Record completion time for UX
     session[SessionKeys.last_predicted_at] = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
+    print(f"Ready to render after {datetime.now()-start_time}")
 
     return render_template(
         "_table.html",
