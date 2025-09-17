@@ -7,15 +7,42 @@
   <script src="https://unpkg.com/htmx.org@1.9.12"></script>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
   <style>
+    /* Badges and small UI bits */
     .badge { padding: 2px 6px; border-radius: 6px; font-size: 0.75rem; }
     .badge-user { background: #cce5ff; color: #084298; }
     .badge-machine { background: #e2e3e5; color: #41464b; }
     .proba { font-size: 0.75rem; color: white; }
-    table thead th { position: sticky; top: 0; background: white; }
-    td.actions button { margin-right: 4px; }
+
+    /* Sticky header */
+    table thead th { position: sticky; top: 0; background: white; z-index: 4; }
+
+    /* Compact table sizing for wide CSVs */
+    #table { overflow-x: visible; }
+    .table-wrap { overflow-x: auto; }
+    table[role="grid"] { font-size: 16px; border-collapse: collapse; table-layout: auto; }
+    table[role="grid"] th,
+    table[role="grid"] td { padding: 0.25rem 0.5rem; line-height: 1.15; white-space: nowrap; }
+
+    /* Buttons: compact but usable */
+    td.actions button { margin-right: 4px; font-size: 14px; padding: 0.25rem 0.5rem; line-height: 1.1; min-height: 32px; }
+
+    /* Sticky first two columns (Actions, valid_sale) */
+    :root { --actions-col-width: 12rem; }
+    table[role="grid"] th:nth-child(1),
+    table[role="grid"] td:nth-child(1) {
+      position: sticky; left: 0; z-index: 3; background: white; min-width: var(--actions-col-width);
+    }
+    table[role="grid"] th:nth-child(2) {
+      position: sticky; left: var(--actions-col-width); z-index: 2; background: white;
+    }
+    table[role="grid"] td:nth-child(2) {
+      position: sticky; left: var(--actions-col-width); z-index: 2; /* keep cell background colors (valid/invalid/heat-*) */
+    }
+
     /* Backgrounds for user-labeled cells */
     .bg-valid { background-color: rgb(0,255,0); }
     .bg-invalid { background-color: rgb(255,0,0); }
+
     /* Heatmap for machine predictions (0..20 = red->yellow->green) */
     .heat-0  { background-color: rgb(128, 0, 0); }
     .heat-1  { background-color: rgb(128, 12, 0); }
@@ -38,6 +65,15 @@
     .heat-18 { background-color: rgb(25,  128, 0); }
     .heat-19 { background-color: rgb(12,  128, 0); }
     .heat-20 { background-color: rgb(0,   128, 0); }
+
+    /* Tighten status/predict margins to reclaim space */
+    #status { margin: 0.25rem 0 0.5rem 0; }
+    #predict-form { margin: 0.25rem 0 0.5rem 0 !important; }
+
+    /* Option A: allow Actions cell content to stack vertically */
+    td.actions { white-space: normal; }
+    td.actions form { display: block !important; margin: 0 0 4px 0; }
+    td.actions button { display: block; width: 100%; margin-right: 0; }
   </style>
 </head>
 <body>
