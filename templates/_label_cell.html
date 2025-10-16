@@ -1,4 +1,4 @@
-{% set key = (row['key_primary'] | string) %}
+{% set key = (row['key_sale'] | string) %}
 {% set source = sources.get(key, 'unknown') %}
 {% set val = row['valid_sale'] %}
 {% set p = (probas.get(key) if source == 'machine' else None) %}

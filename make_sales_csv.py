@@ -3,7 +3,7 @@
 Synthetic property sales data generator that writes CSV instead of returning a DataFrame.
 
 Spec recap:
-- key_primary: 10-digit unique ID per row
+- key_sale: 10-digit unique ID per row
 - sale_date: mm/dd/yyyy
 - sale_price: [0, 1_200_000], with ~15% "very low" (<= 999) values; much higher chance
   of very low when buyer/seller surnames match
@@ -185,7 +185,7 @@ def build_dataframe(
     prices = np.clip(np.round(prices).astype(int), 0, 1_200_000)
 
     df = pd.DataFrame({
-        "key_primary": unique_10_digit_ids(rng, n_rows),
+        "key_sale": unique_10_digit_ids(rng, n_rows),
         "sale_date": sale_date,
         "sale_price": prices,
         "buyer_name": buyer_names,

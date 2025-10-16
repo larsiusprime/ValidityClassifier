@@ -25,7 +25,7 @@ except Exception:  # pragma: no cover
 @dataclass
 class SessionKeys:
     df_json: str = "df_json"
-    label_source: str = "label_source"  # map from key_primary to source: user|machine|unknown
+    label_source: str = "label_source"  # map from key_sale to source: user|machine|unknown
     proba: str = "pred_proba"  # optional prediction probability per key
     last_predicted_at: str = "last_predicted_at"  # timestamp of last predict completion
     labels_version: str = "labels_version"  # incremented on each user label/unset
@@ -51,12 +51,12 @@ MODEL_REGISTRY: dict = {}
 
 
 def make_demo_dataframe(n: int = 200) -> pd.DataFrame:
-    """Create a simple synthetic dataset with a key_primary column and mixed features."""
+    """Create a simple synthetic dataset with a key_sale column and mixed features."""
     import numpy as np
 
     rng = np.random.default_rng(42)
     df = pd.DataFrame({
-        "key_primary": [f"row_{i:04d}" for i in range(n)],
+        "key_sale": [f"row_{i:04d}" for i in range(n)],
         "amount": rng.normal(100, 30, n).round(2),
         "items": rng.integers(1, 10, n),
         "channel": rng.choice(["online", "store", "phone"], n, p=[0.5, 0.4, 0.1]),
@@ -74,22 +74,25 @@ def load_initial_dataframe() -> pd.DataFrame:
 
     - Looks for sales_data.csv in the project directory (same dir as this app.py).
     - Ensures a 'valid_sale' column exists and is initialized to 'unknown'.
-    - Ensures key_primary is treated as string.
+    - Ensures key_sale is treated as string.
     """
     csv_path = os.path.join(os.path.dirname(__file__), "sales_data.csv")
     if os.path.exists(csv_path):
         try:
-            df = pd.read_csv(csv_path, keep_default_na=False, na_filter=False)
+            df = pd.read_csv(csv_path, keep_default_na=False, na_filter=False, low_memory=False)
             # Enforce key as string to be consistent throughout the app
-            if "key_primary" in df.columns:
-                df["key_primary"] = df["key_primary"].astype(str)
+            if "key_sale" in df.columns:
+                df["key_sale"] = df["key_sale"].astype(str)
             else:
-                # If CSV somehow lacks key_primary, fall back to demo to avoid breakage
+                # If CSV somehow lacks key_sale, fall back to demo to avoid breakage
                 return make_demo_dataframe()
             if "valid_sale" not in df.columns:
                 df["valid_sale"] = "unknown"
+            else:
+                raise Exception("CSV already has valid_sale column. Cannot overwrite.")
             return df
-        except Exception:
+        except Exception as e:
+            print(f"exception {e}")
             # On any read/parse error, fall back to demo data
             print("Unable to find sales_data.csv. Using synthetic dataframe.")
             return make_demo_dataframe()
@@ -121,11 +124,11 @@ def get_frame_from_session() -> pd.DataFrame:
     if df_json is None:
         df = load_initial_dataframe()
         # Sanitize once per session for feature columns
-        feature_cols = [c for c in df.columns if c not in ("key_primary", "valid_sale")]
+        feature_cols = [c for c in df.columns if c not in ("key_sale", "valid_sale")]
         df = sanitize_df(df, feature_cols)
         put_frame_in_session(df)
         # initialize label sources as unknown
-        session[SessionKeys.label_source] = {k: "unknown" for k in df["key_primary"].tolist()}
+        session[SessionKeys.label_source] = {k: "unknown" for k in df["key_sale"].tolist()}
         session[SessionKeys.proba] = {}
         # initialize versioning
         session[SessionKeys.labels_version] = 0
@@ -133,9 +136,9 @@ def get_frame_from_session() -> pd.DataFrame:
         _ = get_sid()
         return df
     df = pd.read_json(StringIO(df_json), orient="split")
-    # Ensure key_primary is string after JSON round-trip to avoid dtype drift
-    if "key_primary" in df.columns:
-        df["key_primary"] = df["key_primary"].astype(str)
+    # Ensure key_sale is string after JSON round-trip to avoid dtype drift
+    if "key_sale" in df.columns:
+        df["key_sale"] = df["key_sale"].astype(str)
     return df
 
 
@@ -144,7 +147,7 @@ def get_sources() -> dict:
     df = get_frame_from_session()
     src = session.get(SessionKeys.label_source)
     if not src:
-        src = {k: "unknown" for k in df["key_primary"].tolist()}
+        src = {k: "unknown" for k in df["key_sale"].tolist()}
         session[SessionKeys.label_source] = src
     return src
 
@@ -207,10 +210,10 @@ def get_registry_entry(sid: str) -> dict:
 
 def _snapshot_training_data(df: pd.DataFrame, sources: dict):
     """Prepare X, y, feature_cols, cat_cols from current df and sources for user-labeled rows."""
-    user_mask = df["key_primary"].map(sources).eq("user")
+    user_mask = df["key_sale"].map(sources).eq("user")
     train_df = df[user_mask]
     y_train = train_df["valid_sale"].map({"valid": 1, "invalid": 0})
-    feature_cols = [c for c in df.columns if c not in ("key_primary", "valid_sale")]
+    feature_cols = [c for c in df.columns if c not in ("key_sale", "valid_sale")]
     X_train = train_df[feature_cols].copy()
     cat_cols = [i for i, c in enumerate(feature_cols) if X_train[c].dtype == "object"]
     y = y_train.astype("Int64").astype(int)
@@ -246,7 +249,7 @@ def maybe_enqueue_training(sid: str, df: pd.DataFrame, sources: dict):
     if CatBoostClassifier is None:
         return
     # Check label requirements
-    user_mask = df["key_primary"].map(sources).eq("user")
+    user_mask = df["key_sale"].map(sources).eq("user")
     y = df.loc[user_mask, "valid_sale"].map({"valid": 1, "invalid": 0})
     counts = y.value_counts()
     if counts.get(1, 0) < REQUIRED_PER_CLASS or counts.get(0, 0) < REQUIRED_PER_CLASS:
@@ -286,7 +289,7 @@ def labeled_counts() -> Tuple[int, int]:
     """Return counts of user-labeled valid and invalid rows."""
     df = get_frame_from_session()
     src = get_sources()
-    user_mask = df["key_primary"].map(src).eq("user")
+    user_mask = df["key_sale"].map(src).eq("user")
     user_df = df[user_mask]
     pos = (user_df["valid_sale"] == "valid").sum()
     neg = (user_df["valid_sale"] == "invalid").sum()
@@ -344,7 +347,7 @@ def index():
 
 @app.post("/label")
 def set_label():
-    """Set a user label for a specific row identified by key_primary.
+    """Set a user label for a specific row identified by key_sale.
 
     Expects form fields: key, value in {valid, invalid}
     Returns the updated table fragment.
@@ -356,12 +359,12 @@ def set_label():
 
     df = get_frame_from_session()
     key = str(key)
-    keys_str = set(df["key_primary"].astype(str))
+    keys_str = set(df["key_sale"].astype(str))
     if key not in keys_str:
         return ("Unknown key", 404)
 
     # Update the row using string-safe comparison
-    mask = df["key_primary"].astype(str) == key
+    mask = df["key_sale"].astype(str) == key
     df.loc[mask, "valid_sale"] = value
     put_frame_in_session(df)
 
@@ -410,12 +413,12 @@ def unset_label():
 
     df = get_frame_from_session()
     key = str(key)
-    keys_str = set(df["key_primary"].astype(str))
+    keys_str = set(df["key_sale"].astype(str))
     if key not in keys_str:
         return ("Unknown key", 404)
 
     # Revert the row label to unknown using string-safe comparison
-    mask = df["key_primary"].astype(str) == key
+    mask = df["key_sale"].astype(str) == key
     df.loc[mask, "valid_sale"] = "unknown"
     put_frame_in_session(df)
 
@@ -438,7 +441,7 @@ def unset_label():
     pos, neg = labeled_counts()
     state = predict_button_state(pos, neg)
 
-    row = df.loc[df["key_primary"] == key].iloc[0]
+    row = df.loc[df["key_sale"] == key].iloc[0]
 
     return render_template(
         "_row_response.html",
@@ -465,7 +468,7 @@ def predict():
         return ("CatBoost is not installed in this environment.", 500)
 
     # Prepare training data: only user-labeled rows
-    user_mask = df["key_primary"].map(src).eq("user")
+    user_mask = df["key_sale"].map(src).eq("user")
     train_df = df[user_mask]
 
     # Guard: need at least REQUIRED_PER_CLASS labels per class for stratified split
@@ -478,7 +481,7 @@ def predict():
         )
 
     # Feature set for prediction
-    feature_cols = [c for c in df.columns if c not in ("key_primary", "valid_sale")]
+    feature_cols = [c for c in df.columns if c not in ("key_sale", "valid_sale")]
 
     # Retrieve per-session model
     sid = get_sid()
@@ -517,7 +520,7 @@ def predict():
         put_frame_in_session(df)
 
         # Update sources and store probabilities (bulk, avoid per-row session writes)
-        keys_series = df.loc[X_pred.index, "key_primary"].astype(str)
+        keys_series = df.loc[X_pred.index, "key_sale"].astype(str)
         keys = keys_series.tolist()
 
         # Bulk update label sources for predicted rows
@@ -560,10 +563,10 @@ def predict():
 def reset():
     df = load_initial_dataframe()
     # Sanitize once per session on reset
-    feature_cols = [c for c in df.columns if c not in ("key_primary", "valid_sale")]
+    feature_cols = [c for c in df.columns if c not in ("key_sale", "valid_sale")]
     df = sanitize_df(df, feature_cols)
     put_frame_in_session(df)
-    session[SessionKeys.label_source] = {k: "unknown" for k in df["key_primary"].tolist()}
+    session[SessionKeys.label_source] = {k: "unknown" for k in df["key_sale"].tolist()}
     session[SessionKeys.proba] = {}
     session.pop(SessionKeys.last_predicted_at, None)
     # Clear labels_version and per-session model registry entry

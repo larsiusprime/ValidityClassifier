@@ -30,7 +30,7 @@
   </thead>
   <tbody>
     {% for _, row in df.iterrows() %}
-      {% set key = (row['key_primary'] | string) %}
+      {% set key = (row['key_sale'] | string) %}
       {% set source = sources.get(key, 'unknown') %}
       <tr id="row-{{ key }}">
         <!-- Actions first -->
