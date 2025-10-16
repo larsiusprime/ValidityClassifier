@@ -1,3 +1,5 @@
 /sale.csv
 /sale_trimmed.csv
 /sales_data_old.csv
+.venv/*
+.flask_session/
